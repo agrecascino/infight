@@ -5,6 +5,11 @@
 #include <websocketpp/client.hpp>
 #include <mutex>
 #include <tcl.h>
+#include <jsoncpp/json/json.h>
+#include <curlpp/cURLpp.hpp>
+#include <curlpp/Easy.hpp>
+#include <curlpp/Options.hpp>
+#include <curlpp/Infos.hpp>
 
 using namespace std;
 using namespace Tk;
@@ -91,15 +96,42 @@ public:
 class Infight {
 public:
     Infight() {
+        cURLpp::initialize();
+        load_spoof();
+    }
+
+    void load_spoof(bool retry = false) {
+        if (retry) {
+           destroy(".failure");
+           destroy(".retry");
+        }
+        try {
+            cURLpp::Easy spoofinfo;
+            spoofinfo.setOpt<curlpp::options::Url>("https://discordapp.com/");
+            spoofinfo.setOpt<curlpp::options::UserAgent>(fakeagent);
+            spoofinfo.perform();
+            cURLpp::infos::CookieList::get(spoofinfo, spoofcookies);
+        } catch(...) {
+            label(".failure") - text("Failed to get spoofing info!");
+            pack(".failure") - pady(10) - padx(5);
+            button(".retry") - command(std::bind(&Infight::load_spoof, this, true)) - text("Retry");
+            pack(".retry") - pady(10) - padx(5);
+            return;
+        }
+        create_login_panel();
+
+    }
+
+    void create_login_panel() {
         label(".login") - text("Welcome to infight!");
         pack(".login") - pady(10) - padx(5);
         label(".username") - text("Username:");
         pack(".username") - pady(10) - padx(5);
-        entry(".nentry");
+        entry(".nentry") - textvariable(login_mail);
         pack(".nentry");
         label(".password") - text("Password:");
         pack(".password") - pady(10) - padx(5);
-        entry(".npassword");
+        entry(".npassword") - textvariable(login_pass);
         pack(".npassword");
         button(".loginbutton") - command(std::bind(&Infight::login_callback, this)) - text("Login");
         pack(".loginbutton") - pady(10) - padx(5);
@@ -120,6 +152,17 @@ public:
         destroy(".loginbutton");
         label(".test") - text("Establishing connection!");
         pack(".test") - pady(10) - padx(5);
+        cURLpp::Easy loginrq;
+        loginrq.setOpt<curlpp::options::Url>(authurl);
+        loginrq.setOpt<curlpp::options::UserAgent>(fakeagent);
+        for(string s : spoofcookies) {
+            loginrq.setOpt<curlpp::options::CookieList>(s);
+        }
+        Json::Value root;
+        root["email"] = login_mail;
+        root["password"] = login_pass;
+        std::cout << root.toStyledString() << std::endl;
+        std::cout << login_mail << ":" << login_pass << std::endl;
         client.set_open_handler(std::bind(&Infight::on_connection, this, std::placeholders::_1));
         client.set_message_handler(std::bind(&Infight::on_message, this, &client, std::placeholders::_1, std::placeholders::_2));
         client.clear_access_channels(websocketpp::log::alevel::message_payload);
@@ -153,6 +196,11 @@ public:
     }
 
 private:
+    std::string login_mail;
+    std::string login_pass;
+    std::list<std::string> spoofcookies;
+    const std::string fakeagent = "Mozilla/5.0 (X11; Linux x86_64; rv:52.0) Gecko/20100101 Firefox/52.0";
+    const std::string authurl = "https://discordapp.com/api/v6/auth/login";
     websocketpp::client<websocketpp::config::asio_tls> client;
     std::thread remote;
     WindowManager manager;
