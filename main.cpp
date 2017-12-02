@@ -5,11 +5,13 @@
 #include <websocketpp/client.hpp>
 #include <mutex>
 #include <tcl.h>
-#include <jsoncpp/json/json.h>
+#include <json/json.h>
 #include <curlpp/cURLpp.hpp>
 #include <curlpp/Easy.hpp>
 #include <curlpp/Options.hpp>
 #include <curlpp/Infos.hpp>
+#include <experimental/filesystem>
+#include <fstream>
 
 using namespace std;
 using namespace Tk;
@@ -123,6 +125,14 @@ public:
     }
 
     void create_login_panel() {
+        std::experimental::filesystem::path token("~/.config/infight/token");
+        string line;
+        if (std::experimental::filesystem::exists(token)) {
+            std::fstream a("~/.config/infight/token", std::ios_base::in);
+            if(std::getline(a, line)) {
+                token = line;
+            }
+        }
         label(".login") - text("Welcome to infight!");
         pack(".login") - pady(10) - padx(5);
         label(".username") - text("Username:");
@@ -153,6 +163,8 @@ public:
         label(".test") - text("Establishing connection!");
         pack(".test") - pady(10) - padx(5);
         cURLpp::Easy loginrq;
+        std::list<std::string> header;
+        header.push_back("Content-Type: application/json");
         loginrq.setOpt<curlpp::options::Url>(authurl);
         loginrq.setOpt<curlpp::options::UserAgent>(fakeagent);
         for(string s : spoofcookies) {
@@ -161,7 +173,10 @@ public:
         Json::Value root;
         root["email"] = login_mail;
         root["password"] = login_pass;
-        std::cout << root.toStyledString() << std::endl;
+        std::string comb = writer.write(root);
+        std::cout << comb << std::endl;
+        loginrq.setOpt(new curlpp::options::PostFields(comb));
+        loginrq.setOpt(new curlpp::options::PostFieldSize(comb.length()));
         std::cout << login_mail << ":" << login_pass << std::endl;
         client.set_open_handler(std::bind(&Infight::on_connection, this, std::placeholders::_1));
         client.set_message_handler(std::bind(&Infight::on_message, this, &client, std::placeholders::_1, std::placeholders::_2));
@@ -178,6 +193,22 @@ public:
             button(".loginbutton") - command(std::bind(&Infight::login_callback, this)) - text("Login");
             pack(".loginbutton") - pady(10) - padx(5);
             return;
+        }
+        std::ostringstream response;
+        loginrq.setOpt(new curlpp::options::WriteStream(&response));
+        loginrq.perform();
+        std::cout << response.str() << std::endl;
+        Json::Value token(response.str());
+        if(token["token"].empty()) {
+            ".login" << configure() - text("Failed to login to discord!");
+            destroy(".test");
+            button(".loginbutton") - command(std::bind(&Infight::login_callback, this)) - text("Login");
+            pack(".loginbutton") - pady(10) - padx(5);
+            return;
+        } else {
+            std::fstream f("~/.config/infight/token", std::ios_base::out);
+            f.write(token["token"].asString().c_str(), token["token"].asString().size());
+            f.close();
         }
         ".test" << configure() - text("Sucessfully initialized networking.");
         client.connect(con);
@@ -196,6 +227,8 @@ public:
     }
 
 private:
+    Json::FastWriter writer;
+    std::string token;
     std::string login_mail;
     std::string login_pass;
     std::list<std::string> spoofcookies;
