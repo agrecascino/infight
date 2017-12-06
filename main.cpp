@@ -5,7 +5,7 @@
 #include <websocketpp/client.hpp>
 #include <mutex>
 #include <tcl.h>
-#include <json/json.h>
+#include <jsoncpp/json/json.h>
 #include <curlpp/cURLpp.hpp>
 #include <curlpp/Easy.hpp>
 #include <curlpp/Options.hpp>
@@ -125,14 +125,21 @@ public:
     }
 
     void create_login_panel() {
-        std::experimental::filesystem::path token("~/.config/infight/token");
+        std::experimental::filesystem::path token(".config/infight/token");
         string line;
         if (std::experimental::filesystem::exists(token)) {
-            std::fstream a("~/.config/infight/token", std::ios_base::in);
+            std::fstream a(std::experimental::filesystem::absolute(token), std::ios_base::in);
             if(std::getline(a, line)) {
                 token = line;
+            } else {
+                goto nevermind;
             }
+            label(".login") - text("Token found, connecting...");
+            pack(".login") - pady(10) - padx(5);
+            gateway_callback_shim();
+            return;
         }
+        nevermind:
         label(".login") - text("Welcome to infight!");
         pack(".login") - pady(10) - padx(5);
         label(".username") - text("Username:");
@@ -148,36 +155,52 @@ public:
     }
 
     void on_message(websocketpp::client<websocketpp::config::asio_tls> *client, websocketpp::connection_hdl hdl, websocketpp::config::asio_tls::message_type::ptr msg) {
-
+        std::cout <<
     }
 
     void on_connection(websocketpp::connection_hdl hdl) {
         std::mutex mtx;
         mtx.lock();
-        ".test" << configure() - text("Connected to Discord Gateway!");
+        ".login" << configure() - text("Connected to Discord Gateway!");
         mtx.unlock();
+        Json::Value hello;
+        hello["heartbeat_interval"] = 42000;
+        hello["_trace"] = {""};
+        websocketpp::lib::error_code ec;
+        client.send(hdl,writer.write(hello), websocketpp::frame::opcode::text, ec);
+
     }
 
-    void login_callback() {
-        destroy(".loginbutton");
-        label(".test") - text("Establishing connection!");
-        pack(".test") - pady(10) - padx(5);
+    Json::Value login(Json::Value root) {
         cURLpp::Easy loginrq;
         std::list<std::string> header;
         header.push_back("Content-Type: application/json");
         loginrq.setOpt<curlpp::options::Url>(authurl);
         loginrq.setOpt<curlpp::options::UserAgent>(fakeagent);
+        loginrq.setOpt<curlpp::options::HttpHeader>(header);
         for(string s : spoofcookies) {
             loginrq.setOpt<curlpp::options::CookieList>(s);
         }
-        Json::Value root;
-        root["email"] = login_mail;
-        root["password"] = login_pass;
         std::string comb = writer.write(root);
         std::cout << comb << std::endl;
         loginrq.setOpt(new curlpp::options::PostFields(comb));
         loginrq.setOpt(new curlpp::options::PostFieldSize(comb.length()));
         std::cout << login_mail << ":" << login_pass << std::endl;
+        std::ostringstream response;
+        loginrq.setOpt(new curlpp::options::WriteStream(&response));
+        loginrq.perform();
+        std::cout << response.str() << std::endl;
+        Json::Value token;
+        Json::Reader reader;
+        reader.parse(response.str(), token);
+        for(string s : token.getMemberNames()) {
+            std::cout << s << std::endl;
+        }
+        std::cout << token.toStyledString() << std::endl;
+        return token;
+    }
+
+    int gateway_connect() {
         client.set_open_handler(std::bind(&Infight::on_connection, this, std::placeholders::_1));
         client.set_message_handler(std::bind(&Infight::on_message, this, &client, std::placeholders::_1, std::placeholders::_2));
         client.clear_access_channels(websocketpp::log::alevel::message_payload);
@@ -188,31 +211,45 @@ public:
         });
         websocketpp::client<websocketpp::config::asio_tls>::connection_ptr con = client.get_connection("wss://gateway.discord.gg", ec);
         if(ec) {
-            ".login" << configure() - text("Failed to initialize networking!");
-            destroy(".test");
-            button(".loginbutton") - command(std::bind(&Infight::login_callback, this)) - text("Login");
-            pack(".loginbutton") - pady(10) - padx(5);
-            return;
+            return 0;
         }
-        std::ostringstream response;
-        loginrq.setOpt(new curlpp::options::WriteStream(&response));
-        loginrq.perform();
-        std::cout << response.str() << std::endl;
-        Json::Value token(response.str());
-        if(token["token"].empty()) {
-            ".login" << configure() - text("Failed to login to discord!");
-            destroy(".test");
-            button(".loginbutton") - command(std::bind(&Infight::login_callback, this)) - text("Login");
-            pack(".loginbutton") - pady(10) - padx(5);
-            return;
-        } else {
-            std::fstream f("~/.config/infight/token", std::ios_base::out);
-            f.write(token["token"].asString().c_str(), token["token"].asString().size());
-            f.close();
-        }
-        ".test" << configure() - text("Sucessfully initialized networking.");
         client.connect(con);
         launch_asio_event_loop();
+        return 1;
+    }
+
+    void gateway_callback_shim() {
+        if(!gateway_connect()) {
+            button(".rebutton") - command(std::bind(&Infight::gateway_callback_shim, this)) - text("Login");
+            pack(".rebutton") - pady(10) - padx(5);
+        }
+    }
+
+    void login_callback() {
+        destroy(".loginbutton");
+        Json::Value root;
+        root["email"] = login_mail;
+        root["password"] = login_pass;
+        std::cout << login_mail << ":" << login_pass << std::endl;
+        Json::Value token = login(root);
+        try{
+            this->token = token["token"].asString();
+            std::experimental::filesystem::path p(".config/infight/token");
+            std::string path = std::experimental::filesystem::absolute(p);
+            std::fstream f(path, std::ios_base::out | std::ios_base::trunc);
+            f.write(token["token"].asString().c_str(), token["token"].asString().size());
+            f.close();
+        } catch(...) {
+            ".login" << configure() - text("Failed to login to discord!");
+            button(".loginbutton") - command(std::bind(&Infight::login_callback, this)) - text("Login");
+            pack(".loginbutton") - pady(10) - padx(5);
+            return;
+        }
+        destroy(".username");
+        destroy(".nentry");
+        destroy(".password");
+        destroy(".npassword");
+        gateway_callback_shim();
     }
 
     void launch_asio_event_loop() {
@@ -226,6 +263,13 @@ public:
         client.run();
     }
 
+    void heartbeat_loop(size_t ms) {
+        while (true) {
+            std::this_thread::sleep_for(std::chrono::milliseconds(ms));
+
+        }
+    }
+
 private:
     Json::FastWriter writer;
     std::string token;
@@ -236,6 +280,7 @@ private:
     const std::string authurl = "https://discordapp.com/api/v6/auth/login";
     websocketpp::client<websocketpp::config::asio_tls> client;
     std::thread remote;
+    std::thread heartbeat;
     WindowManager manager;
 };
 
