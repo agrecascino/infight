@@ -5,7 +5,7 @@
 #include <websocketpp/client.hpp>
 #include <mutex>
 #include <tcl.h>
-#include <jsoncpp/json/json.h>
+#include <json/json.h>
 #include <curlpp/cURLpp.hpp>
 #include <curlpp/Easy.hpp>
 #include <curlpp/Options.hpp>
@@ -155,7 +155,6 @@ public:
     }
 
     void on_message(websocketpp::client<websocketpp::config::asio_tls> *client, websocketpp::connection_hdl hdl, websocketpp::config::asio_tls::message_type::ptr msg) {
-        std::cout <<
     }
 
     void on_connection(websocketpp::connection_hdl hdl) {
@@ -234,6 +233,7 @@ public:
         Json::Value token = login(root);
         try{
             this->token = token["token"].asString();
+            std::experimental::filesystem::current_path(getenv("HOME"));
             std::experimental::filesystem::path p(".config/infight/token");
             std::string path = std::experimental::filesystem::absolute(p);
             std::fstream f(path, std::ios_base::out | std::ios_base::trunc);
