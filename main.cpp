@@ -5,13 +5,14 @@
 #include <websocketpp/client.hpp>
 #include <mutex>
 #include <tcl.h>
-#include <json/json.h>
+#include <jsoncpp/json/json.h>
 #include <curlpp/cURLpp.hpp>
 #include <curlpp/Easy.hpp>
 #include <curlpp/Options.hpp>
 #include <curlpp/Infos.hpp>
 #include <experimental/filesystem>
 #include <fstream>
+#include <map>
 
 using namespace std;
 using namespace Tk;
@@ -48,12 +49,12 @@ public:
         int i = 0;
         for(std::string s : items){
             label(ft + "." + to_string(i)) - text(s);
-            pack(ft + "." + to_string(i))  - padx(5) - pady(6);
+            pack(ft + "." + to_string(i))  - padx(2) - pady(3);
             i++;
         }
         if(!items.size()) {
             label(ft + ".empty") - text("Nothing here!");
-            pack(ft + ".empty")  - padx(5) - pady(6);
+            pack(ft + ".empty")  - padx(2) - pady(3);
         }
     }
 
@@ -85,12 +86,34 @@ private:
     string t;
 };
 
+enum ConnectStage {
+    Unconnected,
+    NeedIdentify,
+    WaitForReady,
+    Connected,
+    NeedResume
+};
+
 class WindowManager {
 public:
     WindowManager() : m("Infight", 400, 300) {
     }
 
-    private:
+    void AddList(std::string n, List* list) {
+        lists[n] = list;
+    }
+
+    void RemoveList(std::string n) {
+        delete lists[n];
+        lists.erase(lists.find(n));
+    }
+
+    List* GetList(std::string n) {
+        return lists[n];
+    }
+
+private:
+    std::map<std::string, List*> lists;
     RootWindow m;
     std::thread t;
 };
@@ -104,8 +127,8 @@ public:
 
     void load_spoof(bool retry = false) {
         if (retry) {
-           destroy(".failure");
-           destroy(".retry");
+            destroy(".failure");
+            destroy(".retry");
         }
         try {
             cURLpp::Easy spoofinfo;
@@ -125,10 +148,12 @@ public:
     }
 
     void create_login_panel() {
-        std::experimental::filesystem::path token(".config/infight/token");
+        std::experimental::filesystem::current_path(getenv("HOME"));
+        std::experimental::filesystem::path p(".config/infight/token");
+        std::string path = std::experimental::filesystem::absolute(p);
         string line;
-        if (std::experimental::filesystem::exists(token)) {
-            std::fstream a(std::experimental::filesystem::absolute(token), std::ios_base::in);
+        if (std::experimental::filesystem::exists(path)) {
+            std::fstream a(std::experimental::filesystem::absolute(path), std::ios_base::in);
             if(std::getline(a, line)) {
                 token = line;
             } else {
@@ -139,7 +164,7 @@ public:
             gateway_callback_shim();
             return;
         }
-        nevermind:
+nevermind:
         label(".login") - text("Welcome to infight!");
         pack(".login") - pady(10) - padx(5);
         label(".username") - text("Username:");
@@ -154,7 +179,89 @@ public:
         pack(".loginbutton") - pady(10) - padx(5);
     }
 
+    void ident() {
+        auto hdl = con->get_handle();
+        websocketpp::lib::error_code ec;
+        Json::Value id;
+        Json::Value props;
+        id["token"] = token;
+        props["$os"] = "linux";
+        props["$browser"] = "infight";
+        props["$device"] = "infight";
+        Json::Value presence;
+        presence["status"] = "dnd";
+        presence["afk"] = false;
+        Json::Value game;
+        game["name"] = "nothing";
+        game["type"] = 0;
+        presence["since"] = 12345679;
+        presence["game"] = game;
+        id["presence"] = presence;
+        id["properties"] = props;
+        Json::Value op;
+        op["op"] = 2;
+        op["d"] = id;
+        client.send(hdl,writer.write(op), websocketpp::frame::opcode::text, ec);
+    }
+
     void on_message(websocketpp::client<websocketpp::config::asio_tls> *client, websocketpp::connection_hdl hdl, websocketpp::config::asio_tls::message_type::ptr msg) {
+        std::cout << msg->get_opcode() << std::endl;
+        std::cout << msg->get_payload() << std::endl;
+        std::mutex mtx;
+        mtx.lock();
+        Json::Value out;
+        Json::Reader reader;
+        reader.parse(msg->get_payload(), out);
+        int64_t op = out["op"].asInt64();
+        Json::Value d = out["d"];
+        lastseq = out["s"];
+        mtx.unlock();
+        if(cstage == NeedIdentify) {
+            ident();
+            cstage = WaitForReady;
+        }
+        switch(op) {
+        case 10:
+            cstage = NeedIdentify;
+            launch_heartbeat_event_loop(d["heartbeat_interval"].asInt64());
+            break;
+        case 11:
+            ".login" << configure() - text("ACK recieved" + lastseq.asString());
+            break;
+        case 1:
+            beat();
+            break;
+        case 0:
+            std::string t = out["t"].asString();
+            if(t == "READY") {
+                cstage = Connected;
+                ".login" << configure() - text("Logged in successfully!");
+                Json::Value user = d["user"];
+                Json::Value dm = d["private_channels"];
+                label(".id") - text(user["id"].asString());
+                pack(".id") - pady(10) - padx(5);
+                label(".username") - text(user["username"].asString());
+                pack(".username") - pady(10) - padx(5);
+                label(".email") - text(user["email"].asString());
+                pack(".email") - pady(10) - padx(5);
+                label(".discriminator") - text(user["discriminator"].asString());
+                pack(".discriminator") - pady(10) - padx(5);
+                List *l = new List(320, 960, "dms");
+                std::vector<std::string> names;
+                for(Json::Value v : dm) {
+                    if(v["type"].asInt64() == 1) {
+                        names.push_back(v["recipients"][0]["username"].asString());
+                        continue;
+                    }
+                    if(v["name"].asString() == "")
+                        continue;
+                    names.push_back(v["name"].asString());
+                }
+                l->set_list(names);
+                l->draw();
+            }
+            break;
+        }
     }
 
     void on_connection(websocketpp::connection_hdl hdl) {
@@ -162,12 +269,6 @@ public:
         mtx.lock();
         ".login" << configure() - text("Connected to Discord Gateway!");
         mtx.unlock();
-        Json::Value hello;
-        hello["heartbeat_interval"] = 42000;
-        hello["_trace"] = {""};
-        websocketpp::lib::error_code ec;
-        client.send(hdl,writer.write(hello), websocketpp::frame::opcode::text, ec);
-
     }
 
     Json::Value login(Json::Value root) {
@@ -208,7 +309,7 @@ public:
         client.set_tls_init_handler([this](websocketpp::connection_hdl){
             return websocketpp::lib::make_shared<boost::asio::ssl::context>(boost::asio::ssl::context::tlsv1);
         });
-        websocketpp::client<websocketpp::config::asio_tls>::connection_ptr con = client.get_connection("wss://gateway.discord.gg", ec);
+        con = client.get_connection("wss://gateway.discord.gg/?v=6&encoding=json", ec);
         if(ec) {
             return 0;
         }
@@ -259,18 +360,37 @@ public:
         remote.detach();
     }
 
+    void launch_heartbeat_event_loop(size_t ms) {
+        heartbeat = std::thread([&]() {
+            heartbeat_loop(ms);
+        });
+        heartbeat.detach();
+    }
+
     void asio_event_loop() {
         client.run();
     }
 
     void heartbeat_loop(size_t ms) {
         while (true) {
+            beat();
             std::this_thread::sleep_for(std::chrono::milliseconds(ms));
-
         }
     }
 
+    void beat() {
+        auto hdl = con->get_handle();
+        websocketpp::lib::error_code ec;
+        Json::Value heartbeat;
+        heartbeat["op"] = 1;
+        heartbeat["d"] = lastseq;
+        client.send(hdl,writer.write(heartbeat), websocketpp::frame::opcode::text, ec);
+    }
+
 private:
+    ConnectStage cstage = Unconnected;
+    websocketpp::client<websocketpp::config::asio_tls>::connection_ptr con;
+    Json::Value lastseq;
     Json::FastWriter writer;
     std::string token;
     std::string login_mail;
