@@ -5,7 +5,7 @@
 #include <websocketpp/client.hpp>
 #include <mutex>
 #include <tcl.h>
-#include <jsoncpp/json/json.h>
+#include <json/json.h>
 #include <curlpp/cURLpp.hpp>
 #include <curlpp/Easy.hpp>
 #include <curlpp/Options.hpp>
@@ -16,6 +16,24 @@
 
 using namespace std;
 using namespace Tk;
+
+enum DMType {
+    GroupDM,
+    UserDM
+};
+
+class DMChat {
+    DMType type;
+    std::string id;
+    std::vector<std::string> users;
+    std::string title;
+
+    std::string get_sdmuser() const { return users[0]; }
+};
+
+class Guild {
+    std::string id;
+};
 
 class Window {
 public:
@@ -35,6 +53,8 @@ public:
 
     virtual void draw() {}
 
+    virtual ~Window() {}
+
 protected:
     int x;
     int y;
@@ -47,11 +67,21 @@ public:
     List(int xsz, int ysz, string ti) : Window(xsz, ysz, ti) {}
     virtual void draw() {
         int i = 0;
-        for(std::string s : items){
-            label(ft + "." + to_string(i)) - text(s);
-            pack(ft + "." + to_string(i))  - padx(2) - pady(3);
-            i++;
-        }
+//        std::string textf;
+//        for(std::string s : items){
+//            textf += s + "\n";
+////            label(ft + "." + to_string(i)) - text(s);
+////            pack(ft + "." + to_string(i))  - padx(2) - pady(3);
+////            i++;
+//        }
+//        labelframe(ft + ".l") - text(textf) - height(y - 20) - width(x - 20);
+//        pack(ft + ".l") - pady(1);
+        listbox(ft + ".lb") -selectmode("multiple") - height(20);
+        std::string cmd = "[list " + ft + ".lb set]";
+        scrollbar(ft + ".sb") - command(cmd);
+        ft + ".lb" << configure() -yscrollcommand("[list " + ft +  ".sb set]");
+        ft + ".lb" << insert(0, items.begin(), items.end());
+        grid(ft + ".lb", ft + ".sb") - sticky("news");
         if(!items.size()) {
             label(ft + ".empty") - text("Nothing here!");
             pack(ft + ".empty")  - padx(2) - pady(3);
@@ -194,7 +224,7 @@ nevermind:
         Json::Value game;
         game["name"] = "nothing";
         game["type"] = 0;
-        presence["since"] = 12345679;
+        //presence["since"] = 12345679;
         presence["game"] = game;
         id["presence"] = presence;
         id["properties"] = props;
@@ -246,7 +276,7 @@ nevermind:
                 pack(".email") - pady(10) - padx(5);
                 label(".discriminator") - text(user["discriminator"].asString());
                 pack(".discriminator") - pady(10) - padx(5);
-                List *l = new List(320, 960, "dms");
+                List *l = new List(320, 640, "dms");
                 std::vector<std::string> names;
                 for(Json::Value v : dm) {
                     if(v["type"].asInt64() == 1) {
@@ -259,6 +289,11 @@ nevermind:
                 }
                 l->set_list(names);
                 l->draw();
+                List *g = new List(320, 640, "guilds");
+                Json::Value guilds = d["guilds"];
+                for(Json::Value v : guilds) {
+                }
+                manager.AddList("dms", l);
             }
             break;
         }
@@ -270,6 +305,7 @@ nevermind:
         ".login" << configure() - text("Connected to Discord Gateway!");
         mtx.unlock();
     }
+
 
     Json::Value login(Json::Value root) {
         cURLpp::Easy loginrq;
@@ -300,9 +336,18 @@ nevermind:
         return token;
     }
 
+
+    void on_fail(websocketpp::connection_hdl hdl) {
+        ".login" << configure() - text("Failed to connect to discord gateway!");
+        button(".rebutton") - command(std::bind(&Infight::gateway_callback_shim, this)) - text("Login");
+        pack(".rebutton") - pady(10) - padx(5);
+        client.stop();
+    }
+
     int gateway_connect() {
         client.set_open_handler(std::bind(&Infight::on_connection, this, std::placeholders::_1));
         client.set_message_handler(std::bind(&Infight::on_message, this, &client, std::placeholders::_1, std::placeholders::_2));
+        client.set_fail_handler(std::bind(&Infight::on_fail, this, std::placeholders::_1));
         client.clear_access_channels(websocketpp::log::alevel::message_payload);
         websocketpp::lib::error_code ec;
         client.init_asio();
@@ -320,7 +365,7 @@ nevermind:
 
     void gateway_callback_shim() {
         if(!gateway_connect()) {
-            button(".rebutton") - command(std::bind(&Infight::gateway_callback_shim, this)) - text("Login");
+            button(".rebutton") - command(std::bind(&Infight::gateway_callback_shim, this)) - text("Attempt Reconnect");
             pack(".rebutton") - pady(10) - padx(5);
         }
     }
