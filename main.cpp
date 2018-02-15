@@ -5,7 +5,7 @@
 #include <websocketpp/client.hpp>
 #include <mutex>
 #include <tcl.h>
-#include <jsoncpp/json/json.h>
+#include <json/json.h>
 #include <curlpp/cURLpp.hpp>
 #include <curlpp/Easy.hpp>
 #include <curlpp/Options.hpp>
@@ -16,9 +16,10 @@
 
 using namespace std;
 using namespace Tk;
-class User {
+struct User {
     std::string userid;
     std::string displayname;
+    std::string discriminator;
 };
 
 struct Message {
@@ -63,7 +64,7 @@ enum DMType {
     UserDM
 };
 
-class DMChat {
+struct DMChat {
     DMType type;
     std::string id;
     std::vector<User> users;
@@ -73,18 +74,25 @@ class DMChat {
     User get_sdmuser() const { return users[0]; }
 };
 
-class Channel {
+struct Channel {
     std::string id;
     std::string name;
     MessageLogger logger;
 };
 
-class Guild {
+struct Guild {
     std::string id;
     std::string displayname;
     std::vector<Channel> channels;
 
-    Channel& getChannelById
+    Channel& getChannelById(std::string s) {
+        for(Channel &c : channels) {
+            if(c.id == s) {
+                return c;
+            }
+        }
+        return nullptr;
+    }
 
 };
 
@@ -120,15 +128,6 @@ public:
     List(int xsz, int ysz, string ti) : Window(xsz, ysz, ti) {}
     virtual void draw() {
         int i = 0;
-//        std::string textf;
-//        for(std::string s : items){
-//            textf += s + "\n";
-////            label(ft + "." + to_string(i)) - text(s);
-////            pack(ft + "." + to_string(i))  - padx(2) - pady(3);
-////            i++;
-//        }
-//        labelframe(ft + ".l") - text(textf) - height(y - 20) - width(x - 20);
-//        pack(ft + ".l") - pady(1);
         listbox(ft + ".lb") -selectmode("multiple") - height(20);
         std::string cmd = "[list " + ft + ".lb set]";
         scrollbar(ft + ".sb") - command(cmd);
@@ -333,19 +332,37 @@ nevermind:
                 std::vector<std::string> names;
                 for(Json::Value v : dm) {
                     if(v["type"].asInt64() == 1) {
-                        names.push_back(v["recipients"][0]["username"].asString());
+                        DMChat c;
+                        c.type = UserDM;
+                        User u;
+                        u.userid = v["recipients"][0]["id"].asString();
+                        u.displayname = v["recipients"][0]["username"].asString();
+                        u.discriminator = v["recipients"][0]["discriminator"].asString();
+                        c.users.push_back(u);
+                        c.id = v["id"].asString();
+                        dms.push_back(c);
                         continue;
                     }
-                    if(v["name"].asString() == "")
-                        continue;
-                    names.push_back(v["name"].asString());
+                    DMChat c;
+                    c.type = GroupDM;
+                    for(Json::Value a : v["recipients"]) {
+                        User u;
+                        u.userid = a["id"].asString();
+                        u.displayname = a["username"].asString();
+                        u.discriminator = a["discriminator"].asString();
+                        c.users.push_back(u);
+                    }
+                    c.title = v["name"].asString();
+                    if(c.title == "") {
+                        c.title = "DM: ";
+                        for(User &u : c.users) {
+                            c.title += u.displayname;
+                        }
+                    }
                 }
-                l->set_list(names);
+
                 l->draw();
                 List *g = new List(320, 640, "guilds");
-                Json::Value guilds = d["guilds"];
-                for(Json::Value v : guilds) {
-                }
                 manager.AddList("dms", l);
             }
             break;
@@ -486,6 +503,8 @@ nevermind:
     }
 
 private:
+    std::vector<Guild> guilds;
+    std::vector<DMChat> dms;
     ConnectStage cstage = Unconnected;
     websocketpp::client<websocketpp::config::asio_tls>::connection_ptr con;
     Json::Value lastseq;
