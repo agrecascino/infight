@@ -5,7 +5,7 @@
 #include <websocketpp/client.hpp>
 #include <mutex>
 #include <tcl.h>
-#include <json/json.h>
+#include <jsoncpp/json/json.h>
 #include <curlpp/cURLpp.hpp>
 #include <curlpp/Easy.hpp>
 #include <curlpp/Options.hpp>
@@ -16,6 +16,47 @@
 
 using namespace std;
 using namespace Tk;
+class User {
+    std::string userid;
+    std::string displayname;
+};
+
+struct Message {
+    std::string content;
+    User author;
+    std::string id;
+    virtual std::string construct() { return author.displayname + ": " + content + "\n"; }
+};
+
+struct NotAMessage : public Message {
+    virtual std::string construct() { return content; }
+};
+
+class MessageLogger {
+    void PushMessage(Message *msg) {
+        messages.push_back(msg);
+    }
+
+    Message* getLastMessage() {
+        return messages.back();
+    }
+
+    Message* getMessageByIndex(size_t i) {
+        return messages[i];
+    }
+
+    Message* getMessageById(std::string id) {
+        for(Message *msg : messages) {
+            if(msg->id == id)
+                return msg;
+        }
+        return nullptr;
+    }
+
+private:
+    std::vector<Message*> messages;
+
+};
 
 enum DMType {
     GroupDM,
@@ -25,14 +66,26 @@ enum DMType {
 class DMChat {
     DMType type;
     std::string id;
-    std::vector<std::string> users;
+    std::vector<User> users;
     std::string title;
+    MessageLogger logger;
 
-    std::string get_sdmuser() const { return users[0]; }
+    User get_sdmuser() const { return users[0]; }
+};
+
+class Channel {
+    std::string id;
+    std::string name;
+    MessageLogger logger;
 };
 
 class Guild {
     std::string id;
+    std::string displayname;
+    std::vector<Channel> channels;
+
+    Channel& getChannelById
+
 };
 
 class Window {
