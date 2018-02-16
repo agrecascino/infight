@@ -5,7 +5,7 @@
 #include <websocketpp/client.hpp>
 #include <mutex>
 #include <tcl.h>
-#include <json/json.h>
+#include <jsoncpp/json/json.h>
 #include <curlpp/cURLpp.hpp>
 #include <curlpp/Easy.hpp>
 #include <curlpp/Options.hpp>
@@ -40,6 +40,10 @@ class MessageLogger {
 
     Message* getLastMessage() {
         return messages.back();
+    }
+
+    size_t MessageAmounts() {
+        return messages.size();
     }
 
     Message* getMessageByIndex(size_t i) {
@@ -84,6 +88,7 @@ struct Guild {
     std::string id;
     std::string displayname;
     std::vector<Channel> channels;
+    Channel dummy;
 
     Channel& getChannelById(std::string s) {
         for(Channel &c : channels) {
@@ -91,7 +96,7 @@ struct Guild {
                 return c;
             }
         }
-        return nullptr;
+        return dummy;
     }
 
 };
@@ -128,7 +133,7 @@ public:
     List(int xsz, int ysz, string ti) : Window(xsz, ysz, ti) {}
     virtual void draw() {
         int i = 0;
-        listbox(ft + ".lb") -selectmode("multiple") - height(20);
+        listbox(ft + ".lb") -selectmode("multiple") - height(20) - selectmode("browse");
         std::string cmd = "[list " + ft + ".lb set]";
         scrollbar(ft + ".sb") - command(cmd);
         ft + ".lb" << configure() -yscrollcommand("[list " + ft +  ".sb set]");
